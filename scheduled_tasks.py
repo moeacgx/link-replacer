@@ -97,32 +97,47 @@ class ScheduledTaskManager:
     
     def update_task_status(self, task_id: str, status: str, error_msg: str = None):
         """更新任务状态"""
-        for task in self.tasks:
-            if task['id'] == task_id:
-                task['status'] = status
-                task['attempts'] += 1
-                task['last_attempt'] = datetime.now().isoformat()
-                if error_msg:
-                    task['error_message'] = error_msg
-                self.save_tasks()
-                logger.info(f"任务 {task_id} 状态更新为: {status}")
-                break
+        if status == 'completed':
+            # 任务完成后立即删除
+            if self.remove_task(task_id):
+                logger.info(f"任务 {task_id} 已完成并删除")
+            else:
+                logger.warning(f"任务 {task_id} 删除失败，任务不存在")
+        else:
+            # 更新任务状态（失败的任务保留用于调试）
+            for task in self.tasks:
+                if task['id'] == task_id:
+                    task['status'] = status
+                    task['attempts'] += 1
+                    task['last_attempt'] = datetime.now().isoformat()
+                    if error_msg:
+                        task['error_message'] = error_msg
+                    self.save_tasks()
+                    logger.info(f"任务 {task_id} 状态更新为: {status}")
+                    break
     
-    def cleanup_old_tasks(self, days: int = 7):
-        """清理旧任务"""
-        cutoff_date = datetime.now() - timedelta(days=days)
+    def cleanup_old_tasks(self):
+        """清理旧任务 - 优化的清理策略"""
+        now = datetime.now()
         original_count = len(self.tasks)
-        
+
+        # 分类清理策略
         self.tasks = [
             task for task in self.tasks
-            if datetime.fromisoformat(task['created_at']) > cutoff_date
-            or task['status'] == 'pending'
+            if (
+                # 保留待执行任务
+                task['status'] == 'pending' or
+                # 失败任务保留1天用于调试
+                (task['status'] == 'failed' and
+                 datetime.fromisoformat(task['created_at']) > now - timedelta(days=1))
+                # 已完成任务已经在update_task_status中立即删除，这里不需要处理
+            )
         ]
-        
+
         cleaned_count = original_count - len(self.tasks)
         if cleaned_count > 0:
             self.save_tasks()
-            logger.info(f"已清理 {cleaned_count} 个旧任务")
+            logger.info(f"已清理 {cleaned_count} 个旧任务（失败任务保留1天）")
     
     def start_scheduler(self):
         """启动定时调度器"""
