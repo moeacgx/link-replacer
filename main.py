@@ -7,6 +7,7 @@ from telegram.ext import Application, MessageHandler, filters
 from config import config
 from message_handler import message_processor
 from admin_commands import admin_handler
+from forward_mode import forward_mode
 from logger_config import setup_logging, get_logger, error_handler
 
 
@@ -31,7 +32,7 @@ class TelegramBot:
             # 添加消息处理器
             message_handler = MessageHandler(
                 filters.ALL & ~filters.COMMAND,  # 处理所有非命令消息
-                message_processor.handle_channel_message
+                self._handle_all_messages
             )
             self.application.add_handler(message_handler)
             self.logger.info("已添加消息处理器")
@@ -57,6 +58,26 @@ class TelegramBot:
             await error_handler.handle_telegram_error(context.error, "全局错误处理")
         except Exception as e:
             self.logger.error(f"错误处理器异常: {e}")
+
+    async def _handle_all_messages(self, update, context):
+        """统一消息处理器"""
+        try:
+            message = update.message
+            if not message:
+                return
+
+            # 检查是否为私聊消息且转发模式激活
+            if message.chat.type == 'private' and forward_mode.is_active:
+                # 转发模式：处理私聊中的消息
+                await forward_mode.handle_forwarded_message(update, context)
+            elif message.chat.type in ['channel', 'supergroup'] and not forward_mode.is_active:
+                # 监听模式：只处理频道/超级群组消息
+                await message_processor.handle_channel_message(update, context)
+            else:
+                # 其他情况不处理
+                self.logger.debug(f"跳过处理消息 - 聊天类型: {message.chat.type}, 转发模式: {forward_mode.is_active}")
+        except Exception as e:
+            self.logger.error(f"消息处理失败: {e}")
     
 
     
