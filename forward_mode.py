@@ -338,8 +338,14 @@ class ForwardMode:
                 logger.info(f"当前状态 - 批量模式: {self.is_batch_mode}, 定时设置: {self.scheduled_time}")
 
                 if self.is_batch_mode:
-                    # 批量模式：添加整个媒体组到队列
-                    self.pending_messages.extend(messages)
+                    # 批量模式：添加媒体组作为一个整体到队列
+                    # 使用特殊标记来表示这是一个媒体组
+                    media_group_item = {
+                        'type': 'media_group',
+                        'messages': messages,
+                        'group_id': messages[0].media_group_id
+                    }
+                    self.pending_messages.append(media_group_item)
                     logger.info(f"媒体组已添加到批量队列，当前队列长度: {len(self.pending_messages)}")
                     # 发送确认消息
                     await text_message.reply_text(f"✅ 媒体组已加入批量队列 ({len(messages)} 个媒体)")
@@ -410,15 +416,28 @@ class ForwardMode:
                 logger.info("✅ 媒体组消息包含目标文本，开始转发处理")
 
                 if self.is_batch_mode:
-                    # 批量模式：添加整个媒体组到队列
-                    self.pending_messages.extend(messages)
+                    # 批量模式：添加媒体组作为一个整体到队列
+                    # 使用特殊标记来表示这是一个媒体组
+                    media_group_item = {
+                        'type': 'media_group',
+                        'messages': messages,
+                        'group_id': group_id
+                    }
+                    self.pending_messages.append(media_group_item)
                     logger.info(f"媒体组已添加到批量队列，当前队列长度: {len(self.pending_messages)}")
                     # 发送确认消息
                     await text_message.reply_text(f"✅ 媒体组已加入批量队列 ({len(messages)} 个媒体)")
                 else:
                     # 立即处理模式
-                    await self._process_media_group_messages(messages, context)
-                    # 不在这里发送通知，等实际发送完成后再通知
+                    if self.scheduled_time:
+                        # 有定时设置，添加到定时任务
+                        logger.info(f"检测到定时设置: {self.scheduled_time}，创建定时任务")
+                        await self._schedule_media_group_messages(messages, context)
+                    else:
+                        # 立即发送
+                        logger.info("无定时设置，立即发送")
+                        await self._process_media_group_messages(messages, context)
+                        # 不在这里发送通知，等实际发送完成后再通知
             else:
                 logger.info("媒体组中没有找到包含文本的消息")
 
@@ -443,19 +462,29 @@ class ForwardMode:
                 logger.info("没有待处理的消息")
                 return 0
 
-            logger.info(f"开始处理批量消息，共 {len(self.pending_messages)} 条")
+            logger.info(f"开始处理批量消息，共 {len(self.pending_messages)} 项")
 
             processed = 0
-            for message in self.pending_messages:
+            for item in self.pending_messages:
                 try:
-                    await self._process_single_message(message, context)
-                    processed += 1
+                    if isinstance(item, dict) and item.get('type') == 'media_group':
+                        # 处理媒体组
+                        messages = item['messages']
+                        await self._process_media_group_messages(messages, context)
+                        processed += 1
+                    else:
+                        # 处理单条消息
+                        await self._process_single_message(item, context)
+                        processed += 1
                 except Exception as e:
-                    logger.error(f"处理消息 {message.message_id} 失败: {e}")
+                    if isinstance(item, dict):
+                        logger.error(f"处理媒体组失败: {e}")
+                    else:
+                        logger.error(f"处理消息 {item.message_id} 失败: {e}")
                     self.error_count += 1
 
             self.pending_messages.clear()
-            logger.info(f"批量处理完成，成功处理 {processed} 条消息")
+            logger.info(f"批量处理完成，成功处理 {processed} 项")
             return processed
 
         except Exception as e:
@@ -627,36 +656,76 @@ class ForwardMode:
                 logger.warning("没有配置目标频道")
                 return
 
-            # 准备批量消息信息
-            batch_messages_info = []
-            for message in self.pending_messages:
-                message_info = {
-                    'message_id': message.message_id,
-                    'type': None,
-                    'file_id': None,
-                    'caption': message.caption or "",
-                    'text': message.text or "",
-                    'original_chat_id': message.chat.id
-                }
+            # 直接保存批量消息的原始结构，不做复杂的序列化
+            # 这样可以保持媒体组的完整性
+            batch_items_info = []
+            for item in self.pending_messages:
+                if isinstance(item, dict) and item.get('type') == 'media_group':
+                    # 媒体组：保存基本信息，让定时任务直接调用现有的发送方法
+                    messages = item['messages']
+                    media_group_info = {
+                        'type': 'media_group',
+                        'group_id': item['group_id'],
+                        'messages_data': []
+                    }
 
-                if message.photo:
-                    message_info['type'] = 'photo'
-                    message_info['file_id'] = message.photo[-1].file_id
-                elif message.video:
-                    message_info['type'] = 'video'
-                    message_info['file_id'] = message.video.file_id
-                elif message.document:
-                    message_info['type'] = 'document'
-                    message_info['file_id'] = message.document.file_id
-                elif message.text:
-                    message_info['type'] = 'text'
+                    # 只保存必要的信息用于重建发送
+                    for message in messages:
+                        msg_data = {
+                            'message_id': message.message_id,
+                            'chat_id': message.chat.id,
+                            'text': message.text or "",
+                            'caption': message.caption or "",
+                            'entities': [{'type': e.type, 'offset': e.offset, 'length': e.length, 'url': getattr(e, 'url', None)} for e in (message.entities or message.caption_entities or [])],
+                        }
 
-                batch_messages_info.append(message_info)
+                        # 保存媒体信息
+                        if message.photo:
+                            msg_data['media_type'] = 'photo'
+                            msg_data['file_id'] = message.photo[-1].file_id
+                        elif message.video:
+                            msg_data['media_type'] = 'video'
+                            msg_data['file_id'] = message.video.file_id
+                        elif message.document:
+                            msg_data['media_type'] = 'document'
+                            msg_data['file_id'] = message.document.file_id
+                        else:
+                            msg_data['media_type'] = 'text'
+
+                        media_group_info['messages_data'].append(msg_data)
+
+                    batch_items_info.append(media_group_info)
+                else:
+                    # 单条消息
+                    message = item
+                    message_info = {
+                        'type': 'single_message',
+                        'message_id': message.message_id,
+                        'chat_id': message.chat.id,
+                        'text': message.text or "",
+                        'caption': message.caption or "",
+                        'entities': [{'type': e.type, 'offset': e.offset, 'length': e.length, 'url': getattr(e, 'url', None)} for e in (message.entities or message.caption_entities or [])],
+                    }
+
+                    # 保存媒体信息
+                    if message.photo:
+                        message_info['media_type'] = 'photo'
+                        message_info['file_id'] = message.photo[-1].file_id
+                    elif message.video:
+                        message_info['media_type'] = 'video'
+                        message_info['file_id'] = message.video.file_id
+                    elif message.document:
+                        message_info['media_type'] = 'document'
+                        message_info['file_id'] = message.document.file_id
+                    else:
+                        message_info['media_type'] = 'text'
+
+                    batch_items_info.append(message_info)
 
             # 创建定时任务数据
             task_data = {
                 'channels': target_channels,
-                'messages_info': batch_messages_info
+                'items_info': batch_items_info
             }
 
             # 添加到定时任务
@@ -666,16 +735,39 @@ class ForwardMode:
                 task_data=task_data
             )
 
+            # 计算实际的消息/项目数量
+            total_items = 0
+            for item in self.pending_messages:
+                if isinstance(item, dict) and item.get('type') == 'media_group':
+                    total_items += 1  # 媒体组算作1个项目
+                else:
+                    total_items += 1  # 单条消息算作1个项目
+
             # 发送确认消息（找第一个消息回复）
             if self.pending_messages:
-                first_message = self.pending_messages[0]
-                await first_message.reply_text(
-                    f"✅ 批量消息已添加到定时任务\n"
-                    f"📅 执行时间: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"📦 消息数量: {len(self.pending_messages)} 条\n"
-                    f"🎯 目标频道: {len(target_channels)} 个\n"
-                    f"🆔 任务ID: {task_id}"
-                )
+                # 找到第一个可以回复的消息
+                reply_message = None
+                for item in self.pending_messages:
+                    if isinstance(item, dict) and item.get('type') == 'media_group':
+                        # 媒体组：找第一个有文本的消息
+                        for msg in item['messages']:
+                            if msg.text or msg.caption:
+                                reply_message = msg
+                                break
+                    else:
+                        # 单条消息
+                        reply_message = item
+                    if reply_message:
+                        break
+
+                if reply_message:
+                    await reply_message.reply_text(
+                        f"✅ 批量消息已添加到定时任务\n"
+                        f"📅 执行时间: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}\n"
+                        f"📦 项目数量: {total_items} 项\n"
+                        f"🎯 目标频道: {len(target_channels)} 个\n"
+                        f"🆔 任务ID: {task_id}"
+                    )
 
             # 清除定时设置
             self.scheduled_time = None
