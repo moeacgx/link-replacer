@@ -645,7 +645,113 @@
       "attempts": 1,
       "max_attempts": 3,
       "last_attempt": "2025-08-15T19:46:01.591595"
+    },
+    {
+      "id": "task_1755258696.048815_5",
+      "scheduled_time": "2025-08-15T19:54:00",
+      "task_type": "batch_messages",
+      "task_data": {
+        "channels": [
+          "-1002748738658",
+          "-1002690332117"
+        ],
+        "items_info": [
+          {
+            "type": "media_group",
+            "group_id": "14042069463615045",
+            "messages_data": [
+              {
+                "message_id": 1221,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "🕔视频时长： 24分钟20秒\n🔎视频编号： #编号AUG111\n\n“别被他发现了，射里面好爽啊”\n偷偷的把老板的小情人上了，完美的身材极品巨乳，细枝挂硕果，给骚逼操爽了，不停的在骚逼里抽插，自己非常主动，被调教的很不错，会的姿势超级多，操得她奶子直晃，实在忍不了拔屌颜射吞精。\n\n▶️加入会员观看完整版",
+                "entities": [
+                  {
+                    "type": "blockquote",
+                    "offset": 0,
+                    "length": 33,
+                    "url": null
+                  },
+                  {
+                    "type": "hashtag",
+                    "offset": 24,
+                    "length": 9,
+                    "url": null
+                  },
+                  {
+                    "type": "text_link",
+                    "offset": 142,
+                    "length": 11,
+                    "url": "https://t.me/c/2708330100/4"
+                  }
+                ],
+                "media_type": "video",
+                "file_id": "BAACAgUAAxkBAAICY2ie-Q5GYNbwHnsAAe_BakbA31Ca_AACehYAAjYIwFTQIErPjleNlDYE"
+              },
+              {
+                "message_id": 1222,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICZGie-Q7R6cSC2xE7atrDKfauQSimAAJywzEb8HXAVGY5bhBr7j3IAQADAgADeQADNgQ"
+              },
+              {
+                "message_id": 1223,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICZWie-Q7yIxzfYYwcTasdlZCVIIxsAAJuwzEb8HXAVKxRFovD6pnnAQADAgADeQADNgQ"
+              },
+              {
+                "message_id": 1224,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICZmie-Q5E-_vUlFcIlOALLy5z07DUAAJvwzEb8HXAVKzaUvueWpgIAQADAgADeQADNgQ"
+              },
+              {
+                "message_id": 1225,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICZ2ie-Q67mYlTTfvz2S0Tio9MenaDAAJxwzEb8HXAVOVK1XCAVbVTAQADAgADeQADNgQ"
+              },
+              {
+                "message_id": 1226,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICaGie-Q4tnJmBJgy66Io5CSbHQL3PAAJwwzEb8HXAVO6zCCxsYMegAQADAgADeQADNgQ"
+              },
+              {
+                "message_id": 1227,
+                "chat_id": 7025369609,
+                "text": "",
+                "caption": "",
+                "entities": [],
+                "media_type": "photo",
+                "file_id": "AgACAgUAAxkBAAICaWie-Q43K-sap07mQhGjrwa11gZKAAJtwzEb8HXAVM0JYPinsdkSAQADAgADeQADNgQ"
+              }
+            ]
+          }
+        ]
+      },
+      "status": "completed",
+      "created_at": "2025-08-15T19:51:36.048833",
+      "attempts": 1,
+      "max_attempts": 3,
+      "last_attempt": "2025-08-15T19:55:06.766635"
     }
   ],
-  "last_updated": "2025-08-15T19:46:01.591630"
+  "last_updated": "2025-08-15T19:55:06.766647"
 }

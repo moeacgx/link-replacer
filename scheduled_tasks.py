@@ -409,13 +409,14 @@ class ScheduledTaskManager:
                 text_message_data = msg_data
                 break
 
-        # 处理文本和链接
+        # 处理文本和链接 - 需要进行链接替换处理
         processed_text = ""
         processed_entities = []
         if text_message_data:
-            processed_text = text_message_data['text'] or text_message_data['caption']
+            original_text = text_message_data['text'] or text_message_data['caption']
 
-            # 重建entities
+            # 重建原始entities
+            original_entities = []
             for entity_info in text_message_data.get('entities', []):
                 entity = MessageEntity(
                     type=entity_info['type'],
@@ -423,7 +424,12 @@ class ScheduledTaskManager:
                     length=entity_info['length'],
                     url=entity_info.get('url')
                 )
-                processed_entities.append(entity)
+                original_entities.append(entity)
+
+            # 进行链接替换处理
+            processed_text, processed_entities = self._process_message_links_for_scheduled(
+                original_text, original_entities, chat_id
+            )
 
         # 构建媒体列表 - 完全参考forward_mode的逻辑
         for i, msg_data in enumerate(messages_data):
@@ -540,8 +546,8 @@ class ScheduledTaskManager:
         """从信息重建并发送单条消息"""
         from telegram import MessageEntity
 
-        # 重建entities
-        entities = []
+        # 重建原始entities
+        original_entities = []
         for entity_info in message_info.get('entities', []):
             entity = MessageEntity(
                 type=entity_info['type'],
@@ -549,35 +555,51 @@ class ScheduledTaskManager:
                 length=entity_info['length'],
                 url=entity_info.get('url')
             )
-            entities.append(entity)
+            original_entities.append(entity)
 
-        # 根据消息类型发送
+        # 根据消息类型发送（处理链接替换）
         if message_info['media_type'] == 'text':
+            # 处理文本消息的链接替换
+            processed_text, processed_entities = self._process_message_links_for_scheduled(
+                message_info['text'], original_entities, chat_id
+            )
             await bot.send_message(
                 chat_id=chat_id,
-                text=message_info['text'],
-                entities=entities
+                text=processed_text,
+                entities=processed_entities
             )
         elif message_info['media_type'] == 'photo':
+            # 处理图片消息的caption链接替换
+            processed_caption, processed_entities = self._process_message_links_for_scheduled(
+                message_info['caption'], original_entities, chat_id
+            )
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=message_info['file_id'],
-                caption=message_info['caption'] or None,
-                caption_entities=entities if message_info['caption'] else None
+                caption=processed_caption or None,
+                caption_entities=processed_entities if processed_caption else None
             )
         elif message_info['media_type'] == 'video':
+            # 处理视频消息的caption链接替换
+            processed_caption, processed_entities = self._process_message_links_for_scheduled(
+                message_info['caption'], original_entities, chat_id
+            )
             await bot.send_video(
                 chat_id=chat_id,
                 video=message_info['file_id'],
-                caption=message_info['caption'] or None,
-                caption_entities=entities if message_info['caption'] else None
+                caption=processed_caption or None,
+                caption_entities=processed_entities if processed_caption else None
             )
         elif message_info['media_type'] == 'document':
+            # 处理文档消息的caption链接替换
+            processed_caption, processed_entities = self._process_message_links_for_scheduled(
+                message_info['caption'], original_entities, chat_id
+            )
             await bot.send_document(
                 chat_id=chat_id,
                 document=message_info['file_id'],
-                caption=message_info['caption'] or None,
-                caption_entities=entities if message_info['caption'] else None
+                caption=processed_caption or None,
+                caption_entities=processed_entities if processed_caption else None
             )
 
         logger.info(f"✅ 定时单条消息发送成功到 {chat_id}")
@@ -595,6 +617,47 @@ class ScheduledTaskManager:
             stats[task['status']] += 1
         
         return stats
+
+    def _process_message_links_for_scheduled(self, text: str, original_entities: list, target_chat_id) -> tuple:
+        """处理定时消息中的链接，替换频道ID"""
+        import re
+        from telegram import MessageEntity
+
+        # 获取目标频道ID（处理-100前缀）
+        if isinstance(target_chat_id, str) and target_chat_id.startswith('@'):
+            # 用户名格式，无需处理
+            return text, list(original_entities)
+
+        target_id_str = str(target_chat_id)
+        if target_id_str.startswith('-100'):
+            new_channel_id = target_id_str[4:]
+        else:
+            new_channel_id = target_id_str
+
+        # 处理实体中的链接
+        pattern = r'https://t\.me/c/(\d+)/(\d+)'
+        new_entities = []
+
+        for entity in original_entities:
+            if entity.type == "text_link" and entity.url:
+                match = re.match(pattern, entity.url)
+                if match:
+                    message_id = match.group(2)
+                    new_link = f"https://t.me/c/{new_channel_id}/{message_id}"
+
+                    new_entity = MessageEntity(
+                        type=entity.type,
+                        offset=entity.offset,
+                        length=entity.length,
+                        url=new_link
+                    )
+                    new_entities.append(new_entity)
+                else:
+                    new_entities.append(entity)
+            else:
+                new_entities.append(entity)
+
+        return text, new_entities
 
 
 # 全局定时任务管理器实例
