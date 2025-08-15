@@ -144,8 +144,8 @@ class MessageProcessor:
 
                 logger.info("✅ 媒体组消息包含目标文本，开始处理")
 
-                # 处理消息
-                await self._process_message(text_message, context)
+                # 处理媒体组消息
+                await self._process_media_group_message(messages, text_message, context)
             else:
                 logger.info("媒体组中没有找到包含文本的消息")
 
@@ -157,6 +157,107 @@ class MessageProcessor:
                 del self.media_group_buffer[group_id]
             if group_id in self.media_group_timers:
                 del self.media_group_timers[group_id]
+
+    async def _process_media_group_message(self, messages: list, text_message: Message, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """处理媒体组消息 - 保持媒体组结构"""
+        try:
+            logger.info("开始处理媒体组消息，保持媒体组结构")
+
+            # 处理文本消息的链接
+            original_text = text_message.text or text_message.caption or ""
+            logger.info(f"原始文本: {original_text}")
+
+            # 处理链接
+            processed_text, processed_entities = self._process_links(text_message, text_message.chat.id)
+
+            # 检查是否有变化
+            original_entities = text_message.entities or text_message.caption_entities or []
+            has_entity_changes = any(
+                orig.url != proc.url if hasattr(orig, 'url') and hasattr(proc, 'url') else False
+                for orig, proc in zip(original_entities, processed_entities)
+            )
+
+            if processed_text != original_text or has_entity_changes:
+                logger.info("检测到链接变化，需要重新发送媒体组")
+
+                # 删除整个媒体组
+                for msg in messages:
+                    await self._delete_message_safely(context, msg.chat.id, msg.message_id)
+
+                # 重新发送媒体组，但只更新第一个媒体的caption
+                await self._resend_media_group(messages, processed_text, processed_entities, context)
+
+                self.processed_count += 1
+                logger.info("✅ 成功处理媒体组消息")
+            else:
+                logger.info("媒体组消息无需处理")
+
+        except Exception as e:
+            logger.error(f"处理媒体组消息失败: {e}")
+            import traceback
+            logger.error(f"错误详情: {traceback.format_exc()}")
+            self.error_count += 1
+
+    async def _resend_media_group(self, messages: list, new_caption: str, new_entities: list, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """重新发送媒体组"""
+        try:
+            from telegram import InputMediaPhoto, InputMediaVideo, InputMediaDocument
+
+            media_list = []
+            chat_id = messages[0].chat.id
+
+            for i, message in enumerate(messages):
+                logger.info(f"处理媒体组中的第 {i+1} 个消息")
+
+                # 确定媒体类型和文件ID
+                if message.photo:
+                    # 获取最大尺寸的照片
+                    photo = message.photo[-1]
+                    if i == 0:
+                        # 第一个媒体包含处理后的caption
+                        media = InputMediaPhoto(
+                            media=photo.file_id,
+                            caption=new_caption,
+                            caption_entities=new_entities
+                        )
+                    else:
+                        media = InputMediaPhoto(media=photo.file_id)
+                    media_list.append(media)
+
+                elif message.video:
+                    if i == 0:
+                        media = InputMediaVideo(
+                            media=message.video.file_id,
+                            caption=new_caption,
+                            caption_entities=new_entities
+                        )
+                    else:
+                        media = InputMediaVideo(media=message.video.file_id)
+                    media_list.append(media)
+
+                elif message.document:
+                    if i == 0:
+                        media = InputMediaDocument(
+                            media=message.document.file_id,
+                            caption=new_caption,
+                            caption_entities=new_entities
+                        )
+                    else:
+                        media = InputMediaDocument(media=message.document.file_id)
+                    media_list.append(media)
+
+            if media_list:
+                logger.info(f"准备发送包含 {len(media_list)} 个媒体的媒体组")
+                await context.bot.send_media_group(chat_id=chat_id, media=media_list)
+                logger.info("✅ 成功重新发送媒体组")
+            else:
+                logger.warning("没有找到可发送的媒体")
+
+        except Exception as e:
+            logger.error(f"重新发送媒体组失败: {e}")
+            import traceback
+            logger.error(f"错误详情: {traceback.format_exc()}")
+            raise
     
     def _is_monitored_channel(self, message: Message) -> bool:
         """检查消息是否来自监听的频道"""
