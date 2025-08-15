@@ -12,6 +12,7 @@ from telegram import Update, Message, MessageEntity
 from telegram.ext import ContextTypes
 from telegram.error import TimedOut, NetworkError, RetryAfter
 from config import config
+from scheduled_tasks import scheduled_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class ForwardMode:
         """激活转发模式"""
         self.is_active = True
         self._start_queue_worker()
+        scheduled_task_manager.start_scheduler()
         logger.info("转发模式已激活")
 
     def deactivate(self):
@@ -54,6 +56,7 @@ class ForwardMode:
         self.pending_messages.clear()
         self._stop_queue_worker()
         self._clear_all_queues()
+        scheduled_task_manager.stop_scheduler()
         logger.info("转发模式已停用")
 
     def _start_queue_worker(self):
@@ -207,6 +210,13 @@ class ForwardMode:
         """清除定时发送时间"""
         self.scheduled_time = None
         logger.info("定时发送时间已清除")
+
+    def get_scheduled_time_info(self):
+        """获取定时设置信息"""
+        if self.scheduled_time:
+            return f"已设置定时: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            return "未设置定时"
     
     async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """处理私聊中的消息（转发模式）"""
@@ -241,8 +251,15 @@ class ForwardMode:
                 await message.reply_text(f"✅ 消息已加入批量队列 ({len(self.pending_messages)})")
             else:
                 # 立即处理模式
-                await self._process_single_message(message, context)
-                # 不在这里发送通知，等实际发送完成后再通知
+                if self.scheduled_time:
+                    # 有定时设置，添加到定时任务
+                    logger.info(f"检测到定时设置: {self.scheduled_time}，创建单条消息定时任务")
+                    await self._schedule_single_message(message, context)
+                else:
+                    # 立即发送
+                    logger.info("无定时设置，立即发送单条消息")
+                    await self._process_single_message(message, context)
+                    # 不在这里发送通知，等实际发送完成后再通知
 
         except Exception as e:
             logger.error(f"处理转发消息失败: {e}")
@@ -318,6 +335,7 @@ class ForwardMode:
                     return
 
                 logger.info("✅ 媒体组消息包含目标文本，开始转发处理")
+                logger.info(f"当前状态 - 批量模式: {self.is_batch_mode}, 定时设置: {self.scheduled_time}")
 
                 if self.is_batch_mode:
                     # 批量模式：添加整个媒体组到队列
@@ -325,9 +343,18 @@ class ForwardMode:
                     logger.info(f"媒体组已添加到批量队列，当前队列长度: {len(self.pending_messages)}")
                     # 发送确认消息
                     await text_message.reply_text(f"✅ 媒体组已加入批量队列 ({len(messages)} 个媒体)")
+                    # 批量模式下直接返回，不进行清理（因为还没有真正处理）
+                    return
                 else:
                     # 立即处理模式
-                    await self._process_media_group_messages(messages, context)
+                    if self.scheduled_time:
+                        # 有定时设置，添加到定时任务
+                        logger.info(f"检测到定时设置: {self.scheduled_time}，创建定时任务")
+                        await self._schedule_media_group_messages(messages, context)
+                    else:
+                        # 立即发送
+                        logger.info("无定时设置，立即发送")
+                        await self._process_media_group_messages(messages, context)
             else:
                 logger.info("媒体组中没有找到包含文本的消息")
 
@@ -434,6 +461,229 @@ class ForwardMode:
         except Exception as e:
             logger.error(f"批量处理失败: {e}")
             return 0
+
+    async def send_batch_messages(self, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """发送批量消息（内联键盘调用）"""
+        if self.scheduled_time:
+            # 有定时设置，创建批量定时任务
+            logger.info(f"检测到定时设置: {self.scheduled_time}，创建批量定时任务")
+            await self._schedule_batch_messages(context)
+            processed = len(self.pending_messages)
+            self.pending_messages.clear()  # 清空队列
+        else:
+            # 立即发送
+            logger.info("无定时设置，立即发送批量消息")
+            processed = await self.process_batch_messages(context)
+
+        self.is_batch_mode = False  # 发送完成后关闭批量模式
+        return processed
+
+    async def _schedule_media_group_messages(self, messages, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """将媒体组添加到定时任务"""
+        try:
+            logger.info(f"添加媒体组到定时任务，执行时间: {self.scheduled_time}")
+
+            # 获取目标频道列表
+            target_channels = config.get_channels()
+            if not target_channels:
+                logger.warning("没有配置目标频道")
+                return
+
+            # 准备媒体组信息（序列化存储）
+            media_info = []
+            text_content = ""
+
+            for message in messages:
+                media_item = {
+                    'message_id': message.message_id,
+                    'type': None,
+                    'file_id': None,
+                    'caption': message.caption or "",
+                    'text': message.text or ""
+                }
+
+                if message.photo:
+                    media_item['type'] = 'photo'
+                    media_item['file_id'] = message.photo[-1].file_id
+                elif message.video:
+                    media_item['type'] = 'video'
+                    media_item['file_id'] = message.video.file_id
+                elif message.document:
+                    media_item['type'] = 'document'
+                    media_item['file_id'] = message.document.file_id
+                elif message.text:
+                    media_item['type'] = 'text'
+                    text_content = message.text
+
+                media_info.append(media_item)
+
+            # 创建定时任务数据
+            task_data = {
+                'channels': target_channels,
+                'media_info': media_info,
+                'text_content': text_content,
+                'original_chat_id': messages[0].chat.id if messages else None
+            }
+
+            # 添加到定时任务
+            task_id = scheduled_task_manager.add_task(
+                scheduled_time=self.scheduled_time,
+                task_type='media_group',
+                task_data=task_data
+            )
+
+            # 找到包含文本的消息用于回复
+            text_message = None
+            for msg in messages:
+                if msg.text or msg.caption:
+                    text_message = msg
+                    break
+
+            if text_message:
+                await text_message.reply_text(
+                    f"✅ 媒体组已添加到定时任务\n"
+                    f"📅 执行时间: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"🎯 目标频道: {len(target_channels)} 个\n"
+                    f"🆔 任务ID: {task_id}"
+                )
+
+            # 清除定时设置
+            self.scheduled_time = None
+            logger.info(f"媒体组定时任务已创建: {task_id}")
+
+        except Exception as e:
+            logger.error(f"创建媒体组定时任务失败: {e}")
+            self.error_count += 1
+
+    async def _schedule_single_message(self, message: Message, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """将单条消息添加到定时任务"""
+        try:
+            logger.info(f"添加单条消息到定时任务，执行时间: {self.scheduled_time}")
+
+            # 获取目标频道列表
+            target_channels = config.get_channels()
+            if not target_channels:
+                logger.warning("没有配置目标频道")
+                return
+
+            # 准备消息信息（序列化存储）
+            message_info = {
+                'message_id': message.message_id,
+                'type': None,
+                'file_id': None,
+                'caption': message.caption or "",
+                'text': message.text or "",
+                'original_chat_id': message.chat.id
+            }
+
+            if message.photo:
+                message_info['type'] = 'photo'
+                message_info['file_id'] = message.photo[-1].file_id
+            elif message.video:
+                message_info['type'] = 'video'
+                message_info['file_id'] = message.video.file_id
+            elif message.document:
+                message_info['type'] = 'document'
+                message_info['file_id'] = message.document.file_id
+            elif message.text:
+                message_info['type'] = 'text'
+
+            # 创建定时任务数据
+            task_data = {
+                'channels': target_channels,
+                'message_info': message_info
+            }
+
+            # 添加到定时任务
+            task_id = scheduled_task_manager.add_task(
+                scheduled_time=self.scheduled_time,
+                task_type='single_message',
+                task_data=task_data
+            )
+
+            await message.reply_text(
+                f"✅ 消息已添加到定时任务\n"
+                f"📅 执行时间: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}\n"
+                f"🎯 目标频道: {len(target_channels)} 个\n"
+                f"🆔 任务ID: {task_id}"
+            )
+
+            # 清除定时设置
+            self.scheduled_time = None
+            logger.info(f"单条消息定时任务已创建: {task_id}")
+
+        except Exception as e:
+            logger.error(f"创建单条消息定时任务失败: {e}")
+            self.error_count += 1
+
+    async def _schedule_batch_messages(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """将批量消息添加到定时任务"""
+        try:
+            logger.info(f"添加批量消息到定时任务，执行时间: {self.scheduled_time}")
+
+            # 获取目标频道列表
+            target_channels = config.get_channels()
+            if not target_channels:
+                logger.warning("没有配置目标频道")
+                return
+
+            # 准备批量消息信息
+            batch_messages_info = []
+            for message in self.pending_messages:
+                message_info = {
+                    'message_id': message.message_id,
+                    'type': None,
+                    'file_id': None,
+                    'caption': message.caption or "",
+                    'text': message.text or "",
+                    'original_chat_id': message.chat.id
+                }
+
+                if message.photo:
+                    message_info['type'] = 'photo'
+                    message_info['file_id'] = message.photo[-1].file_id
+                elif message.video:
+                    message_info['type'] = 'video'
+                    message_info['file_id'] = message.video.file_id
+                elif message.document:
+                    message_info['type'] = 'document'
+                    message_info['file_id'] = message.document.file_id
+                elif message.text:
+                    message_info['type'] = 'text'
+
+                batch_messages_info.append(message_info)
+
+            # 创建定时任务数据
+            task_data = {
+                'channels': target_channels,
+                'messages_info': batch_messages_info
+            }
+
+            # 添加到定时任务
+            task_id = scheduled_task_manager.add_task(
+                scheduled_time=self.scheduled_time,
+                task_type='batch_messages',
+                task_data=task_data
+            )
+
+            # 发送确认消息（找第一个消息回复）
+            if self.pending_messages:
+                first_message = self.pending_messages[0]
+                await first_message.reply_text(
+                    f"✅ 批量消息已添加到定时任务\n"
+                    f"📅 执行时间: {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"📦 消息数量: {len(self.pending_messages)} 条\n"
+                    f"🎯 目标频道: {len(target_channels)} 个\n"
+                    f"🆔 任务ID: {task_id}"
+                )
+
+            # 清除定时设置
+            self.scheduled_time = None
+            logger.info(f"批量消息定时任务已创建: {task_id}")
+
+        except Exception as e:
+            logger.error(f"创建批量消息定时任务失败: {e}")
+            self.error_count += 1
 
     async def _process_media_group_messages(self, messages, context: ContextTypes.DEFAULT_TYPE) -> None:
         """处理媒体组消息 - 添加到频道队列"""
@@ -696,10 +946,7 @@ class ForwardMode:
                     'media': media_list
                 }
 
-                # 添加定时发送参数
-                if self.scheduled_time:
-                    send_params['schedule_date'] = int(self.scheduled_time.timestamp())
-
+                # 队列工作器中的媒体组发送（立即发送，不使用schedule_date）
                 await self._send_with_retry(context.bot.send_media_group, **send_params)
                 logger.info(f"✅ 队列处理：媒体组发送成功到 {chat_id}")
                 self.processed_count += 1
@@ -750,9 +997,8 @@ class ForwardMode:
             'disable_web_page_preview': False
         }
 
-        # 添加定时发送参数
-        if self.scheduled_time:
-            send_params['schedule_date'] = int(self.scheduled_time.timestamp())
+        # 队列工作器中的文本消息发送（立即发送，不使用schedule_date）
+        # 注意：这里不添加schedule_date参数，因为队列工作器处理的是立即发送任务
 
         await self._send_with_retry(context.bot.send_message, **send_params)
         logger.info(f"✅ 队列处理：文本消息发送成功到 {chat_id}")
@@ -769,9 +1015,8 @@ class ForwardMode:
             'caption_entities': processed_entities
         }
 
-        # 添加定时发送参数
-        if self.scheduled_time:
-            base_params['schedule_date'] = int(self.scheduled_time.timestamp())
+        # 队列工作器中的媒体消息发送（立即发送，不使用schedule_date）
+        # 注意：这里不添加schedule_date参数，因为队列工作器处理的是立即发送任务
 
         # 根据媒体类型发送
         if message.photo:

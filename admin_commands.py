@@ -25,6 +25,16 @@ class AdminCommandHandler:
     def is_admin(self, user_id: int) -> bool:
         """检查用户是否为管理员"""
         return config.is_admin(user_id)
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """开始命令 - 显示内联键盘主菜单"""
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ 您没有权限使用此机器人")
+            return
+
+        # 导入内联键盘管理器并发送主菜单
+        from inline_keyboard import inline_keyboard_manager
+        await inline_keyboard_manager.send_main_menu(update, context)
     
     async def add_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """添加频道命令处理器"""
@@ -414,6 +424,7 @@ class AdminCommandHandler:
     def get_handlers(self) -> List[CommandHandler]:
         """获取所有命令处理器"""
         return [
+            CommandHandler("start", self.start_command),
             CommandHandler("add_channel", self.add_channel_command),
             CommandHandler("remove_channel", self.remove_channel_command),
             CommandHandler("list_channels", self.list_channels_command),
