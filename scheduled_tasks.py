@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class ScheduledTaskManager:
     """定时任务管理器"""
     
-    def __init__(self, db_file: str = "scheduled_tasks.json"):
+    def __init__(self, db_file: str = "data/scheduled_tasks.json"):
         self.db_file = Path(db_file)
         self.tasks = []  # 内存中的任务列表
         self.scheduler_task = None  # 调度器任务
